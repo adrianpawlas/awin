@@ -1,0 +1,7 @@
+requests
+supabase
+python-dotenv
+transformers
+torch
+Pillow
+timm
