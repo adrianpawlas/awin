@@ -1,0 +1,29 @@
+name: Run Awin Importer
+
+on:
+  workflow_dispatch:
+
+jobs:
+  import:
+    name: Import Awin Datafeed
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    continue-on-error: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Awin importer
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python3 scrapers/awin_importer.py --embed
