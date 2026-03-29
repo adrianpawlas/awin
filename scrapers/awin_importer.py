@@ -203,10 +203,10 @@ def map_row(row: dict) -> dict | None:
     if not product_name or not aw_product_id:
         return None
 
+    merchant_image_url = row.get("merchant_image_url", "").strip()
     aw_image_url = row.get("aw_image_url", "").strip()
     large_image = row.get("large_image", "").strip()
-    merchant_image_url = row.get("merchant_image_url", "").strip()
-    image_url = aw_image_url or large_image or merchant_image_url
+    image_url = merchant_image_url or aw_image_url or large_image
     if not image_url:
         return None
 
@@ -417,13 +417,11 @@ def upsert_batch_with_retry(
     use_embeddings: bool,
     embedder: Optional[SiglipEmbedder] = None,
     existing_products: Optional[dict[str, dict]] = None,
+    has_updated_at: bool = True,
+    has_created_at: bool = True,
 ) -> tuple[int, int, int]:
     if not batch:
         return 0, 0, 0
-
-    new_count = 0
-    updated_count = 0
-    unchanged_count = 0
 
     now = datetime.now(timezone.utc).isoformat()
 
@@ -435,9 +433,6 @@ def upsert_batch_with_retry(
     to_update = []
     need_image_embed: list[dict] = []
     need_info_embed: list[dict] = []
-
-    has_updated_at = True
-    has_created_at = True
 
     for p in batch:
         pid = p["id"]
@@ -476,33 +471,37 @@ def upsert_batch_with_retry(
         for p in to_insert:
             p.pop("_row", None)
             c = {k: v for k, v in p.items() if k not in ("image_embedding", "info_embedding")}
-            c["created_at"] = now
-            c["updated_at"] = now
+            if has_created_at:
+                c["created_at"] = now
+            if has_updated_at:
+                c["updated_at"] = now
             if not c.get("product_url"):
                 c["product_url"] = None
             if not c.get("affiliate_url"):
                 c["affiliate_url"] = None
             cleaned.append(c)
 
-        for attempt in range(MAX_RETRIES):
-            try:
-                supabase.table("products").upsert(cleaned, on_conflict="id").execute()
-                inserted_ids = [p["id"] for p in to_insert]
-                break
-            except Exception as e:
-                print(f"Insert attempt {attempt + 1} failed: {e}")
-                if "updated_at" in str(e):
-                    has_updated_at = False
-                    has_created_at = False
-                    try:
-                        cleaned_no_ts = [{k: v for k, v in c.items() if k not in ("created_at", "updated_at")} for c in cleaned]
-                        supabase.table("products").upsert(cleaned_no_ts, on_conflict="id").execute()
-                        inserted_ids = [p["id"] for p in to_insert]
-                        break
-                    except Exception as e2:
-                        print(f"Insert retry failed: {e2}")
-                if attempt == MAX_RETRIES - 1:
-                    print(f"Failed to insert batch after {MAX_RETRIES} attempts")
+        try:
+            supabase.table("products").upsert(cleaned, on_conflict="id").execute()
+            inserted_ids = [p["id"] for p in to_insert]
+        except Exception as e:
+            err_str = str(e)
+            if "updated_at" in err_str or "created_at" in err_str:
+                cleaned_no_ts = [{k: v for k, v in c.items() if k not in ("created_at", "updated_at")} for c in cleaned]
+                try:
+                    supabase.table("products").upsert(cleaned_no_ts, on_conflict="id").execute()
+                    inserted_ids = [p["id"] for p in to_insert]
+                except Exception as e2:
+                    if "duplicate key" in str(e2).lower():
+                        inserted_ids = []
+                    else:
+                        print(f"Insert failed: {e2}")
+                        inserted_ids = []
+            elif "duplicate key" in err_str.lower():
+                inserted_ids = []
+            else:
+                print(f"Insert failed: {e}")
+                inserted_ids = []
 
     if to_update and use_embeddings and embedder:
         for p in need_image_embed:
@@ -526,32 +525,35 @@ def upsert_batch_with_retry(
         for p in to_update:
             p.pop("_row", None)
             c = {k: v for k, v in p.items() if k not in ("image_embedding", "info_embedding")}
-            c["updated_at"] = now
+            if has_updated_at:
+                c["updated_at"] = now
             if not c.get("product_url"):
                 c["product_url"] = None
             if not c.get("affiliate_url"):
                 c["affiliate_url"] = None
             cleaned.append(c)
 
-        for attempt in range(MAX_RETRIES):
-            try:
-                supabase.table("products").upsert(cleaned, on_conflict="id").execute()
-                updated_ids = [p["id"] for p in to_update]
-                break
-            except Exception as e:
-                print(f"Update attempt {attempt + 1} failed: {e}")
-                if "updated_at" in str(e):
-                    has_updated_at = False
-                    has_created_at = False
-                    try:
-                        cleaned_no_ts = [{k: v for k, v in c.items() if k not in ("created_at", "updated_at")} for c in cleaned]
-                        supabase.table("products").upsert(cleaned_no_ts, on_conflict="id").execute()
-                        updated_ids = [p["id"] for p in to_update]
-                        break
-                    except Exception as e2:
-                        print(f"Update retry failed: {e2}")
-                if attempt == MAX_RETRIES - 1:
-                    print(f"Failed to update batch after {MAX_RETRIES} attempts")
+        try:
+            supabase.table("products").upsert(cleaned, on_conflict="id").execute()
+            updated_ids = [p["id"] for p in to_update]
+        except Exception as e:
+            err_str = str(e)
+            if "updated_at" in err_str or "created_at" in err_str:
+                cleaned_no_ts = [{k: v for k, v in c.items() if k not in ("created_at", "updated_at")} for c in cleaned]
+                try:
+                    supabase.table("products").upsert(cleaned_no_ts, on_conflict="id").execute()
+                    updated_ids = [p["id"] for p in to_update]
+                except Exception as e2:
+                    if "duplicate key" in str(e2).lower():
+                        updated_ids = []
+                    else:
+                        print(f"Update failed: {e2}")
+                        updated_ids = []
+            elif "duplicate key" in err_str.lower():
+                updated_ids = []
+            else:
+                print(f"Update failed: {e}")
+                updated_ids = []
 
     embed_ids = list(set(inserted_ids + updated_ids))
     embed_map = {}
@@ -591,6 +593,8 @@ def process_feed(
     embedder: Optional[SiglipEmbedder],
     limit: Optional[int],
     existing_products: dict[str, dict],
+    has_updated_at: bool = True,
+    has_created_at: bool = True,
 ) -> tuple[int, int, int, int, int]:
     print(f"\nFetching: {url[:80]}...")
     
@@ -637,7 +641,7 @@ def process_feed(
 
         if len(batch) >= BATCH_SIZE:
             new, updated, unchanged = upsert_batch_with_retry(
-                supabase, batch, generate_embeddings, embedder, existing_products
+                supabase, batch, generate_embeddings, embedder, existing_products, has_updated_at, has_created_at
             )
             new_count += new
             updated_count += updated
@@ -659,7 +663,7 @@ def process_feed(
 
     if batch:
         new, updated, unchanged = upsert_batch_with_retry(
-            supabase, batch, generate_embeddings, embedder, existing_products
+            supabase, batch, generate_embeddings, embedder, existing_products, has_updated_at, has_created_at
         )
         new_count += new
         updated_count += updated
@@ -691,6 +695,30 @@ def load_existing_awin_products(supabase: Client) -> dict[str, dict]:
     return all_products
 
 
+def check_table_columns(supabase: Client) -> tuple[bool, bool]:
+    has_updated_at = False
+    has_created_at = False
+    
+    test_id = "_test_col_check_"
+    test_data = [{"id": test_id, "source": "awin", "product_url": f"https://test.com/{test_id}"}]
+    try:
+        supabase.table("products").upsert(test_data, on_conflict="id").execute()
+        supabase.table("products").delete().eq("id", test_id).execute()
+        has_updated_at = True
+        has_created_at = True
+    except Exception as e:
+        err_str = str(e)
+        if "updated_at" in err_str and "created_at" in err_str:
+            has_updated_at = False
+            has_created_at = False
+        elif "updated_at" not in err_str:
+            has_updated_at = True
+        if "created_at" not in err_str:
+            has_created_at = True
+    
+    return has_updated_at, has_created_at
+
+
 def run(limit: Optional[int] = None, skip_stale_delete: bool = False, generate_embeddings: bool = False):
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set")
@@ -701,6 +729,10 @@ def run(limit: Optional[int] = None, skip_stale_delete: bool = False, generate_e
     if generate_embeddings:
         embedder = SiglipEmbedder.get_instance()
         print("Embedding generation enabled.")
+
+    print("Checking table schema...")
+    has_updated_at, has_created_at = check_table_columns(supabase)
+    print(f"Schema: updated_at={has_updated_at}, created_at={has_created_at}")
 
     existing_products = load_existing_awin_products(supabase)
 
@@ -723,7 +755,7 @@ def run(limit: Optional[int] = None, skip_stale_delete: bool = False, generate_e
     for i, url in enumerate(feed_urls):
         print(f"\n--- Feed {i+1}/{len(feed_urls)} ---")
         processed, new, updated, unchanged, skipped = process_feed(
-            supabase, url, seen_ids, merchant_counts, generate_embeddings, embedder, limit, existing_products
+            supabase, url, seen_ids, merchant_counts, generate_embeddings, embedder, limit, existing_products, has_updated_at, has_created_at
         )
         total_processed += processed
         total_new += new
