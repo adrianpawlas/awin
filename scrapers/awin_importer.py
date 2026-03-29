@@ -26,27 +26,10 @@ load_dotenv()
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 
-AWIN_DATAFEED_URL = (
-    "https://productdata.awin.com/datafeed/download/"
-    "apikey/746193b8a6735d6afaff119db9e3bcc7/language/en/"
-    "cid/595,147,149,626,135,163,159,161,170,137,171,548,174,183,178,179,175,172,189,194,141,"
-    "205,198,206,203,208,199,204,201,627,99,100,101,107,110,111,113,114,115,116,118,121,122,127,"
-    "581,624,123,594,125/"
-    "bid/63213,50605,65283,65291,65321,51631,51639,64661,64727,65447,64579,51989,65561,63279,"
-    "65715,64323,65731,53433,65779,64741,65873,64759,65951,65007,66075,66115,64663,64981,63355,"
-    "56141,66517,66603,64843,64991,66743,57573,66795,57757,64619,58035,64339,63407,58789,58999,"
-    "67169,64673,63453,68375,63465,64915,67563,61061,64679,64987,64307,67753,64779,64325,64653,"
-    "62437,68893,69271,69529,70219,71459,71737,72459,72461,72983,73233,73239,73267,73281,74369,"
-    "74417,74481,74511,74591,74639,75115,75699,76245,77801,77999,80929,81949,81955,81963,81995,"
-    "82019,82021,82035/"
-    "columns/aw_deep_link,product_name,aw_product_id,merchant_product_id,merchant_image_url,"
-    "description,merchant_category,search_price,merchant_name,merchant_id,category_name,category_id,"
-    "aw_image_url,currency,store_price,delivery_cost,merchant_deep_link,language,last_updated,"
-    "display_price,data_feed_id,brand_name,colour,specifications,brand_id,product_short_description,"
-    "keywords,saving,savings_percent,large_image,alternate_image_two,alternate_image_four,"
-    "alternate_image,Fashion%3Asize,Fashion%3Amaterial,Fashion%3Acategory/"
-    "format/csv/delimiter/%2C/compression/gzip/"
-)
+DEFAULT_AWIN_DATAFEED_URLS = [
+    "https://productdata.awin.com/datafeed/download/apikey/746193b8a6735d6afaff119db9e3bcc7/language/any/bid/63213,64579,64323,64339,67137,64307,74405,79423/columns/aw_deep_link,product_name,aw_product_id,merchant_product_id,merchant_image_url,description,merchant_category,search_price,merchant_name,merchant_id,category_name,category_id,aw_image_url,currency,store_price,delivery_cost,merchant_deep_link,language,last_updated,display_price,data_feed_id,brand_name,colour,specifications,brand_id,product_short_description,keywords,saving,savings_percent,large_image,alternate_image_three,alternate_image_four,alternate_image_two,alternate_image,Fashion%3Asize,Fashion%3Amaterial,Fashion%3Acategory/format/csv/delimiter/%2C/compression/gzip/",
+    "https://productdata.awin.com/datafeed/download/apikey/746193b8a6735d6afaff119db9e3bcc7/language/any/cid/129,595,539,147,149,613,626,135,163,159,161,170,137,171,548,174,183,178,179,175,172,623,139,614,189,194,141,205,198,206,203,208,199,204,201,627,99,100,101,107,110,111,113,114,115,116,118,121,122,127,581,624,123,594,125,540,542,544,546,547,251,277/bid/63213,65283,65291,65321,51631,64661,64727,64579,51959,51989,65561,64927,65695,64323,65731,53433,64741,64651,65873,65951,63329,66075,66115,64663,64981,64329,63355,56141,66517,66529,66603,64843,64991,66795,57757,64619,64339,63397,63407,58789,67137,67169,64673,68375,63465,60401,64915,61061,64679,67687,63517,64987,64307,64325,64929,64653,68009,68801,68893,69529,70219,70595,71459,71549,71577,71737,72461,73233,73239,73267,73281,74369,74405,74417,74511,74591,74747,74979,76015,76245,77857,77999,79423,80929,81949,81955,81963,82019,82021,82087/columns/aw_deep_link,product_name,aw_product_id,merchant_product_id,merchant_image_url,description,merchant_category,search_price,merchant_name,merchant_id,category_name,category_id,aw_image_url,currency,store_price,delivery_cost,merchant_deep_link,language,last_updated,display_price,data_feed_id,brand_name,colour,specifications,brand_id,product_short_description,keywords,saving,savings_percent,alternate_image,alternate_image_two,alternate_image_four,alternate_image_three,large_image,Fashion%3Asize,Fashion%3Acategory,Fashion%3Amaterial/format/csv/delimiter/%2C/compression/gzip/",
+]
 
 BATCH_SIZE = 50
 BATCH_SLEEP = 0.05
@@ -58,6 +41,15 @@ SIGLIP_MODEL = "vit_base_patch16_siglip_384.webli"
 
 WOMEN_KEYWORDS = ["women", "woman", "female", "ladies", "girl", "womenswear", "femme"]
 MEN_KEYWORDS = ["men", "man", "male", "boys", "menswear", "homme"]
+
+
+def get_feed_urls() -> list[str]:
+    env_urls = os.environ.get("AWIN_DATAFEED_URLS")
+    if env_urls:
+        urls = [u.strip() for u in env_urls.replace("\n", ",").split(",") if u.strip()]
+        if urls:
+            return urls
+    return DEFAULT_AWIN_DATAFEED_URLS
 
 
 class SiglipEmbedder:
@@ -369,7 +361,6 @@ def map_row(row: dict) -> dict | None:
 
 
 
-
 def upsert_batch(
     supabase: Client,
     batch: list[dict],
@@ -430,27 +421,21 @@ def upsert_batch(
     return len(cleaned)
 
 
-def run(limit: Optional[int] = None, skip_stale_delete: bool = False, generate_embeddings: bool = False):
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-        raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set")
-
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-
-    embedder: Optional[SiglipEmbedder] = None
-    if generate_embeddings:
-        embedder = SiglipEmbedder.get_instance()
-        print("Embedding generation enabled.")
-
-    print("Starting Awin datafeed import...")
-    print(f"Fetching: {AWIN_DATAFEED_URL}")
-    if generate_embeddings:
-        print("Embedding generation: ENABLED (SigLIP)")
-    else:
-        print("Embedding generation: DISABLED (use --embed to enable)")
-
-    response = requests.get(AWIN_DATAFEED_URL, stream=True, timeout=120)
+def process_feed(
+    supabase: Client,
+    url: str,
+    seen_ids: set[str],
+    merchant_counts: dict[str, int],
+    generate_embeddings: bool,
+    embedder: Optional[SiglipEmbedder],
+    limit: Optional[int],
+) -> tuple[int, int, int]:
+    print(f"\nFetching: {url[:80]}...")
+    
+    response = requests.get(url, stream=True, timeout=120)
     if response.status_code != 200:
-        raise Exception(f"Failed to fetch datafeed: HTTP {response.status_code}")
+        print(f"Failed to fetch feed: HTTP {response.status_code}")
+        return 0, 0, 0
 
     response.raw.decode_content = True
 
@@ -458,8 +443,6 @@ def run(limit: Optional[int] = None, skip_stale_delete: bool = False, generate_e
     processed = 0
     upserted = 0
     skipped = 0
-    seen_ids: set[str] = set()
-    merchant_counts: dict[str, int] = defaultdict(int)
 
     gz_reader = gzip.open(response.raw, mode="rt", encoding="utf-8", errors="replace")
     csv_reader = csv.DictReader(gz_reader)
@@ -474,6 +457,10 @@ def run(limit: Optional[int] = None, skip_stale_delete: bool = False, generate_e
             continue
 
         if mapped is None:
+            skipped += 1
+            continue
+
+        if mapped["id"] in seen_ids:
             skipped += 1
             continue
 
@@ -493,11 +480,11 @@ def run(limit: Optional[int] = None, skip_stale_delete: bool = False, generate_e
             time.sleep(BATCH_SLEEP)
 
         if limit and upserted >= limit:
-            print(f"\nLimit of {limit} upserted rows reached. Stopping.")
+            print(f"Limit of {limit} upserted rows reached. Stopping.")
             break
 
         if processed % PROGRESS_EVERY == 0:
-            print(f"[{processed}] Processed | Upserted: {upserted} | Skipped: {skipped}")
+            print(f"  [{processed}] Processed | Upserted: {upserted} | Skipped: {skipped}")
 
     if batch:
         count = upsert_batch(supabase, batch, generate_embeddings, embedder)
@@ -508,7 +495,50 @@ def run(limit: Optional[int] = None, skip_stale_delete: bool = False, generate_e
     gz_reader.close()
     response.close()
 
-    print(f"\nFinal — Processed: {processed} | Upserted: {upserted} | Skipped: {skipped}")
+    return processed, upserted, skipped
+
+
+def run(limit: Optional[int] = None, skip_stale_delete: bool = False, generate_embeddings: bool = False):
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set")
+
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+    embedder: Optional[SiglipEmbedder] = None
+    if generate_embeddings:
+        embedder = SiglipEmbedder.get_instance()
+        print("Embedding generation enabled.")
+
+    feed_urls = get_feed_urls()
+    print(f"Starting Awin datafeed import...")
+    print(f"Found {len(feed_urls)} feed(s) to process")
+    if generate_embeddings:
+        print("Embedding generation: ENABLED (SigLIP)")
+    else:
+        print("Embedding generation: DISABLED (use --embed to enable)")
+
+    seen_ids: set[str] = set()
+    merchant_counts: dict[str, int] = defaultdict(int)
+    total_processed = 0
+    total_upserted = 0
+    total_skipped = 0
+
+    for i, url in enumerate(feed_urls):
+        print(f"\n--- Feed {i+1}/{len(feed_urls)} ---")
+        processed, upserted, skipped = process_feed(
+            supabase, url, seen_ids, merchant_counts, generate_embeddings, embedder, limit
+        )
+        total_processed += processed
+        total_upserted += upserted
+        total_skipped += skipped
+        
+        if limit and total_upserted >= limit:
+            print(f"\nGlobal limit of {limit} upserted rows reached. Stopping.")
+            break
+
+    print(f"\n{'='*50}")
+    print(f"Final — Processed: {total_processed} | Upserted: {total_upserted} | Skipped: {total_skipped}")
+    print(f"Unique products seen: {len(seen_ids)}")
 
     if skip_stale_delete:
         print("\nSkipping stale deletion (test mode).")
