@@ -6,6 +6,7 @@ import time
 import json
 import re
 import argparse
+import tempfile
 import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -579,9 +580,54 @@ def upsert_batch_with_retry(
                 if len(update_data) > 0:
                     supabase.table("products").update(update_data).eq("id", pid).execute()
         except Exception as e:
-            print(f"Embed update error: {e}")
+            err_str = str(e)
+            if "updated_at" in err_str:
+                try:
+                    for pid, emb in embed_map.items():
+                        update_data = {}
+                        if emb["image_embedding"] is not None:
+                            update_data["image_embedding"] = emb["image_embedding"]
+                        if emb["info_embedding"] is not None:
+                            update_data["info_embedding"] = emb["info_embedding"]
+                        if len(update_data) > 0:
+                            supabase.table("products").update(update_data).eq("id", pid).execute()
+                except Exception as e2:
+                    print(f"Embed update error: {e2}")
+            else:
+                print(f"Embed update error: {e}")
 
     return new_count, updated_count, unchanged_count
+
+
+def download_feed_with_retry(url: str, max_retries: int = 3) -> Optional[str]:
+    """Download feed to a temp file with retry. Returns temp file path or None."""
+    for attempt in range(1, max_retries + 1):
+        try:
+            print(f"  Download attempt {attempt}/{max_retries}...")
+            resp = requests.get(url, stream=True, timeout=120)
+            resp.raise_for_status()
+            
+            tmp = tempfile.NamedTemporaryFile(suffix=".gz", delete=False)
+            tmp_path = tmp.name
+            
+            total_bytes = 0
+            for chunk in resp.iter_content(chunk_size=8192):
+                if chunk:
+                    tmp.write(chunk)
+                    total_bytes += len(chunk)
+            tmp.close()
+            resp.close()
+            
+            print(f"  Downloaded {total_bytes / (1024*1024):.1f} MB")
+            return tmp_path
+        except Exception as e:
+            print(f"  Download attempt {attempt} failed: {e}")
+            if "tmp_path" in locals() and os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            if attempt == max_retries:
+                return None
+            time.sleep(2 * attempt)
+    return None
 
 
 def process_feed(
@@ -598,12 +644,10 @@ def process_feed(
 ) -> tuple[int, int, int, int, int]:
     print(f"\nFetching: {url[:80]}...")
     
-    response = requests.get(url, stream=True, timeout=120)
-    if response.status_code != 200:
-        print(f"Failed to fetch feed: HTTP {response.status_code}")
+    tmp_path = download_feed_with_retry(url)
+    if tmp_path is None:
+        print(f"Failed to fetch feed after retries: {url[:80]}...")
         return 0, 0, 0, 0, 0
-
-    response.raw.decode_content = True
 
     batch: list[dict] = []
     processed = 0
@@ -612,8 +656,14 @@ def process_feed(
     unchanged_count = 0
     skipped = 0
 
-    gz_reader = gzip.open(response.raw, mode="rt", encoding="utf-8", errors="replace")
-    csv_reader = csv.DictReader(gz_reader)
+    try:
+        gz_reader = gzip.open(tmp_path, mode="rt", encoding="utf-8", errors="replace")
+        csv_reader = csv.DictReader(gz_reader)
+    except Exception as e:
+        print(f"Failed to open downloaded feed: {e}")
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        return 0, 0, 0, 0, 0
 
     for row in csv_reader:
         processed += 1
@@ -670,7 +720,9 @@ def process_feed(
         unchanged_count += unchanged
 
     gz_reader.close()
-    response.close()
+
+    if os.path.exists(tmp_path):
+        os.unlink(tmp_path)
 
     return processed, new_count, updated_count, unchanged_count, skipped
 
