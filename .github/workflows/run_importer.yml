@@ -7,7 +7,7 @@ jobs:
   import:
     name: Import Awin Datafeed
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 360
     continue-on-error: true
 
     steps:
