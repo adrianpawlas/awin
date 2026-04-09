@@ -115,7 +115,7 @@ class SiglipEmbedder:
         except Exception:
             return None
 
-def embed_batch_images(self, items: list[tuple[str, str]], batch_idx: int = 0) -> dict[str, Optional[list[float]]]:
+    def embed_batch_images(self, items: list[tuple[str, str]], batch_idx: int = 0) -> dict[str, Optional[list[float]]]:
         results: dict[str, Optional[list[float]]] = {}
         total = len(items)
         done = 0
