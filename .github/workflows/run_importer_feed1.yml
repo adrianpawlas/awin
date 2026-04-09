@@ -1,0 +1,31 @@
+name: Run Awin Importer - Feed 1
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * *'
+
+jobs:
+  import:
+    name: Import Feed 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    continue-on-error: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Awin importer - Feed 1 only
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python3 scrapers/awin_importer.py --url "${{ vars.AWIN_FEED1_URL }}" --embed

@@ -35,12 +35,12 @@ DEFAULT_AWIN_DATAFEED_URLS = [
 
 BATCH_SIZE = 50
 BATCH_SLEEP = 0.05
-EMBED_DELAY = 0.5
+EMBED_DELAY = 0
 STALE_DELETE_BATCH_SIZE = 100
 STALE_CONSECUTIVE_RUNS = 2
-PROGRESS_EVERY = 10000
+PROGRESS_EVERY = 1000
 EMBED_IMAGE_TIMEOUT = 10
-EMBED_THREADS = 8
+EMBED_THREADS = 32
 SIGLIP_MODEL = "vit_base_patch16_siglip_384.webli"
 MAX_RETRIES = 3
 
@@ -115,12 +115,17 @@ class SiglipEmbedder:
         except Exception:
             return None
 
-    def embed_batch_images(self, items: list[tuple[str, str]]) -> dict[str, Optional[list[float]]]:
+def embed_batch_images(self, items: list[tuple[str, str]], batch_idx: int = 0) -> dict[str, Optional[list[float]]]:
         results: dict[str, Optional[list[float]]] = {}
+        total = len(items)
+        done = 0
         with ThreadPoolExecutor(max_workers=EMBED_THREADS) as executor:
             futures = {executor.submit(self.embed_image_url, url): id_ for id_, url in items}
             for future in as_completed(futures):
                 results[futures[future]] = future.result()
+                done += 1
+                if done % 100 == 0 or done == total:
+                    print(f"  [Embed batch {batch_idx}] {done}/{total} images embedded")
         return results
 
 
@@ -457,7 +462,6 @@ def upsert_batch_with_retry(
     if to_insert and use_embeddings and embedder:
         image_items = [(p["id"], p["image_url"]) for p in to_insert]
         image_embs = embedder.embed_batch_images(image_items)
-        time.sleep(EMBED_DELAY)
 
         for p in to_insert:
             pid = p["id"]
@@ -465,7 +469,6 @@ def upsert_batch_with_retry(
             row = p.pop("_row")
             info_text = build_info_text(row)
             p["info_embedding"] = embedder.embed_text(info_text)
-            time.sleep(EMBED_DELAY)
 
     if to_insert:
         cleaned = []
@@ -505,21 +508,26 @@ def upsert_batch_with_retry(
                 inserted_ids = []
 
     if to_update and use_embeddings and embedder:
+        batch_idx = 0
         for p in need_image_embed:
             image_emb = embedder.embed_image_url(p["image_url"])
-            time.sleep(EMBED_DELAY)
             p["image_embedding"] = image_emb
             row = p.pop("_row")
             info_text = build_info_text(row)
             p["info_embedding"] = embedder.embed_text(info_text)
-            time.sleep(EMBED_DELAY)
+            batch_idx += 1
+            if batch_idx % 20 == 0:
+                print(f"  [Embed update] {batch_idx}/{len(need_image_embed)} processed")
 
+        batch_idx = 0
         for p in need_info_embed:
             if p.get("image_embedding") is None:
                 row = p.pop("_row")
                 info_text = build_info_text(row)
                 p["info_embedding"] = embedder.embed_text(info_text)
-                time.sleep(EMBED_DELAY)
+                batch_idx += 1
+                if batch_idx % 20 == 0:
+                    print(f"  [Embed info-only] {batch_idx}/{len(need_info_embed)} processed")
 
     if to_update:
         cleaned = []
@@ -863,11 +871,18 @@ if __name__ == "__main__":
     parser.add_argument("--limit", type=int, default=None, help="Limit number of rows to upsert (for testing)")
     parser.add_argument("--no-stale-delete", action="store_true", help="Skip stale product deletion")
     parser.add_argument("--embed", action="store_true", help="Generate image and info embeddings with SigLIP")
+    parser.add_argument("--url", type=str, default=None, help="Single feed URL to process")
     args = parser.parse_args()
 
     test_mode = args.limit is not None
+    
+    if args.url:
+        os.environ["AWIN_DATAFEED_URLS"] = args.url
+    
     run(
         limit=args.limit,
         skip_stale_delete=test_mode or args.no_stale_delete,
+        generate_embeddings=args.embed,
+    )
         generate_embeddings=args.embed,
     )
