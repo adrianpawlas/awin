@@ -884,5 +884,3 @@ if __name__ == "__main__":
         skip_stale_delete=test_mode or args.no_stale_delete,
         generate_embeddings=args.embed,
     )
-        generate_embeddings=args.embed,
-    )
