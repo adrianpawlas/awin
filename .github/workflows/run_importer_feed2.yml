@@ -3,7 +3,7 @@ name: Run Awin Importer - Feed 2
 on:
   workflow_dispatch:
   schedule:
-    - cron: '30 6 * * *'
+    - cron: '0 0 * * 1'
 
 jobs:
   import:
