@@ -44,8 +44,16 @@ EMBED_THREADS = 32
 SIGLIP_MODEL = "vit_base_patch16_siglip_384.webli"
 MAX_RETRIES = 3
 
-WOMEN_KEYWORDS = ["women", "woman", "female", "ladies", "girl", "womenswear", "femme"]
-MEN_KEYWORDS = ["men", "man", "male", "boys", "menswear", "homme"]
+WOMEN_KEYWORDS = [
+    "women", "woman", "female", "ladies", "girl", "womenswear", "femme",
+    "dámské", "dáma", "žena", "ženské", "kobieta", "kobiet", "mujer", "mujeres", "dama",
+    "damska", "damské", "ženská",
+]
+MEN_KEYWORDS = [
+    "men", "man", "male", "boys", "menswear", "homme",
+    "pánské", "pán", "muž", "mężczyzna", "mężczyźni", "hombre", "hombres", "varón",
+    "pánska", "pánske", "mužská",
+]
 
 
 def get_feed_urls() -> list[str]:
@@ -158,10 +166,43 @@ def parse_price(value: str) -> float | None:
     return None
 
 
-def build_info_text(row: dict) -> str:
+def format_price(value: str, currency: str) -> str:
+    num = parse_price(value)
+    if num is None:
+        return None
+    curr = currency.strip().upper() if currency else "EUR"
+    return f"{num:.2f}{curr}"
+
+
+TRANSLATOR_CACHE: dict[str, str] = {}
+MAX_TRANSLATE_CACHE = 5000
+
+
+def translate_to_english(text: str) -> str:
+    if not text or not text.strip():
+        return text
+    if len(text) < 3:
+        return text
+    cache_key = text[:100]
+    if cache_key in TRANSLATOR_CACHE:
+        return TRANSLATOR_CACHE[cache_key]
+    try:
+        from deep_translator import GoogleTranslator
+        translator = GoogleTranslator(source="auto", target="en")
+        result = translator.translate(text)
+        if len(TRANSLATOR_CACHE) < MAX_TRANSLATE_CACHE:
+            TRANSLATOR_CACHE[cache_key] = result or text
+        return result or text
+    except Exception:
+        return text
+
+
+def build_info_text(row: dict, language: str = "en") -> str:
     parts = []
     pn = row.get("product_name", "").strip()
     if pn:
+        if language != "en":
+            pn = translate_to_english(pn)
         parts.append(f"Product: {pn}")
     bn = row.get("brand_name", "").strip()
     mn = row.get("merchant_name", "").strip()
@@ -171,21 +212,29 @@ def build_info_text(row: dict) -> str:
         parts.append(f"Brand: {mn}")
     desc = row.get("description", "").strip()
     if desc:
+        if language != "en":
+            desc = translate_to_english(desc)
         parts.append(f"Description: {desc[:500]}")
     short_desc = row.get("product_short_description", "").strip()
     if short_desc and short_desc not in desc:
+        if language != "en":
+            short_desc = translate_to_english(short_desc)
         parts.append(f"Short description: {short_desc[:200]}")
     fc = row.get("Fashion:category", "").strip()
     cn = row.get("category_name", "").strip()
     mc = row.get("merchant_category", "").strip()
     cat = fc or cn or mc
     if cat:
+        if language != "en":
+            cat = translate_to_english(cat)
         parts.append(f"Category: {cat}")
     size = row.get("Fashion:size", "").strip()
     if size:
         parts.append(f"Size: {size}")
     mat = row.get("Fashion:material", "").strip()
     if mat:
+        if language != "en":
+            mat = translate_to_english(mat)
         parts.append(f"Material: {mat}")
     colour = row.get("colour", "").strip()
     if colour:
@@ -290,7 +339,9 @@ def map_row(row: dict) -> dict | None:
     last_updated = row.get("last_updated", "").strip()
     specifications = row.get("specifications", "").strip()
     size = row.get("Fashion:size", "").strip()
+    currency = row.get("currency", "").strip()
     price_val = display_price if display_price else (search_price if search_price else store_price)
+    formatted_price = format_price(price_val, currency)
 
     metadata = {
         "product_name": product_name,
@@ -314,6 +365,7 @@ def map_row(row: dict) -> dict | None:
         "keywords": keywords_raw if keywords_raw else None,
         "specifications": specifications if specifications else None,
         "price": price_val,
+        "formatted_price": formatted_price,
         "search_price": search_price if search_price else None,
         "store_price": store_price if store_price else None,
         "display_price": display_price if display_price else None,
@@ -361,7 +413,7 @@ def map_row(row: dict) -> dict | None:
         "brand_tsv": None,
         "description_tsv": None,
         "other": other,
-        "price": price_val,
+        "price": formatted_price,
         "sale": sale,
         "additional_images": additional_images_str,
         "info_embedding": None,
@@ -467,7 +519,8 @@ def upsert_batch_with_retry(
             pid = p["id"]
             p["image_embedding"] = image_embs.get(pid)
             row = p.pop("_row")
-            info_text = build_info_text(row)
+            lang = row.get("language", "en")
+            info_text = build_info_text(row, lang)
             p["info_embedding"] = embedder.embed_text(info_text)
 
     if to_insert:
@@ -513,7 +566,8 @@ def upsert_batch_with_retry(
             image_emb = embedder.embed_image_url(p["image_url"])
             p["image_embedding"] = image_emb
             row = p.pop("_row")
-            info_text = build_info_text(row)
+            lang = row.get("language", "en")
+            info_text = build_info_text(row, lang)
             p["info_embedding"] = embedder.embed_text(info_text)
             batch_idx += 1
             if batch_idx % 20 == 0:
@@ -523,7 +577,8 @@ def upsert_batch_with_retry(
         for p in need_info_embed:
             if p.get("image_embedding") is None:
                 row = p.pop("_row")
-                info_text = build_info_text(row)
+                lang = row.get("language", "en")
+                info_text = build_info_text(row, lang)
                 p["info_embedding"] = embedder.embed_text(info_text)
                 batch_idx += 1
                 if batch_idx % 20 == 0:
