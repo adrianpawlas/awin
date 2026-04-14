@@ -43,6 +43,8 @@ EMBED_IMAGE_TIMEOUT = 10
 EMBED_THREADS = 32
 SIGLIP_MODEL = "vit_base_patch16_siglip_384.webli"
 MAX_RETRIES = 3
+COMPRESS_IMAGES = True
+COMPRESS_QUALITY = 85
 
 WOMEN_KEYWORDS = [
     "women", "woman", "female", "ladies", "girl", "womenswear", "femme",
@@ -122,6 +124,37 @@ class SiglipEmbedder:
             return emb.squeeze().tolist()
         except Exception:
             return None
+
+    def compress_image_url(self, url: str) -> Optional[str]:
+        if not url or not COMPRESS_IMAGES:
+            return None
+        try:
+            api_url = f"https://api.resmush.it/ws.php?img={url}&qlty={COMPRESS_QUALITY}"
+            headers = {
+                "User-Agent": "AwinImporter/1.0",
+                "Referer": "https://github.com/adrianpawlas/awin"
+            }
+            resp = requests.get(api_url, headers=headers, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("error"):
+                return None
+            return data.get("dest")
+        except Exception:
+            return None
+
+    def compress_batch_images(self, items: list[tuple[str, str]]) -> dict[str, Optional[str]]:
+        results: dict[str, Optional[str]] = {}
+        total = len(items)
+        done = 0
+        with ThreadPoolExecutor(max_workers=EMBED_THREADS) as executor:
+            futures = {executor.submit(self.compress_image_url, url): id_ for id_, url in items}
+            for future in as_completed(futures):
+                results[futures[future]] = future.result()
+                done += 1
+                if done % 50 == 0 or done == total:
+                    print(f"  [Compress] {done}/{total} images compressed")
+        return results
 
     def embed_batch_images(self, items: list[tuple[str, str]], batch_idx: int = 0) -> dict[str, Optional[list[float]]]:
         results: dict[str, Optional[list[float]]] = {}
@@ -514,6 +547,12 @@ def upsert_batch_with_retry(
     if to_insert and use_embeddings and embedder:
         image_items = [(p["id"], p["image_url"]) for p in to_insert]
         image_embs = embedder.embed_batch_images(image_items)
+        
+        if COMPRESS_IMAGES:
+            print(f"  Compressing {len(to_insert)} images...")
+            compressed_urls = embedder.compress_batch_images(image_items)
+            for p in to_insert:
+                p["compressed_image_url"] = compressed_urls.get(p["id"])
 
         for p in to_insert:
             pid = p["id"]
@@ -536,6 +575,8 @@ def upsert_batch_with_retry(
                 c["product_url"] = None
             if not c.get("affiliate_url"):
                 c["affiliate_url"] = None
+            if c.get("compressed_image_url") is None:
+                c.pop("compressed_image_url", None)
             cleaned.append(c)
 
         try:
@@ -565,6 +606,11 @@ def upsert_batch_with_retry(
         for p in need_image_embed:
             image_emb = embedder.embed_image_url(p["image_url"])
             p["image_embedding"] = image_emb
+            
+            if COMPRESS_IMAGES:
+                compressed = embedder.compress_image_url(p["image_url"])
+                p["compressed_image_url"] = compressed
+            
             row = p.pop("_row")
             lang = row.get("language", "en")
             info_text = build_info_text(row, lang)
@@ -595,6 +641,8 @@ def upsert_batch_with_retry(
                 c["product_url"] = None
             if not c.get("affiliate_url"):
                 c["affiliate_url"] = None
+            if c.get("compressed_image_url") is None:
+                c.pop("compressed_image_url", None)
             cleaned.append(c)
 
         try:
