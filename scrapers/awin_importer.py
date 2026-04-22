@@ -14,6 +14,10 @@ from datetime import datetime, timezone
 from io import BytesIO
 from typing import Optional
 
+SCRAPER_DIR = os.path.dirname(os.path.abspath(__file__))
+STALE_MISSES_FILE = os.path.join(SCRAPER_DIR, "_stale_misses.json")
+FAILED_LOG_FILE = os.path.join(SCRAPER_DIR, "_failed_products.log")
+
 import torch
 import requests
 from PIL import Image
@@ -501,6 +505,16 @@ def has_changes(existing: dict, new: dict) -> bool:
     return False
 
 
+def log_failed_products(failed: list[dict], reason: str):
+    try:
+        ts = datetime.now(timezone.utc).isoformat()
+        with open(FAILED_LOG_FILE, "a") as f:
+            for p in failed:
+                f.write(json.dumps({"ts": ts, "reason": reason, "id": p.get("id"), "title": p.get("title")}) + "\n")
+    except Exception:
+        pass
+
+
 def upsert_batch_with_retry(
     supabase: Client,
     batch: list[dict],
@@ -594,11 +608,13 @@ def upsert_batch_with_retry(
                     else:
                         print(f"Insert failed: {e2}")
                         inserted_ids = []
+                        log_failed_products(cleaned_no_ts, str(e2))
             elif "duplicate key" in err_str.lower():
                 inserted_ids = []
             else:
                 print(f"Insert failed: {e}")
                 inserted_ids = []
+                log_failed_products(cleaned, str(e))
 
     if to_update and use_embeddings and embedder:
         batch_idx = 0
@@ -660,11 +676,13 @@ def upsert_batch_with_retry(
                     else:
                         print(f"Update failed: {e2}")
                         updated_ids = []
+                        log_failed_products(cleaned_no_ts, str(e2))
             elif "duplicate key" in err_str.lower():
                 updated_ids = []
             else:
                 print(f"Update failed: {e}")
                 updated_ids = []
+                log_failed_products(cleaned, str(e))
 
     embed_ids = list(set(inserted_ids + updated_ids))
     embed_map = {}
@@ -944,21 +962,38 @@ def run(limit: Optional[int] = None, skip_stale_delete: bool = False, generate_e
         print("\nSkipping stale deletion (test mode).")
     else:
         print("\nProcessing stale Awin products...")
-        stale_deleted = 0
-        stale_products = []
-
-        for pid, prod in existing_products.items():
+        
+        missed_this_run = set()
+        for pid in existing_products:
             if pid not in seen_ids:
-                stale_products.append(pid)
-
-        for pid in stale_products:
+                missed_this_run.add(pid)
+        
+        prev_misses = set()
+        if os.path.exists(STALE_MISSES_FILE):
+            try:
+                with open(STALE_MISSES_FILE) as f:
+                    prev_misses = set(json.load(f))
+            except Exception:
+                pass
+        
+        to_delete = set()
+        for pid in missed_this_run:
+            if pid in prev_misses:
+                to_delete.add(pid)
+        
+        if missed_this_run:
+            with open(STALE_MISSES_FILE, "w") as f:
+                json.dump(list(missed_this_run), f)
+        
+        stale_deleted = 0
+        for pid in to_delete:
             try:
                 supabase.table("products").delete().eq("id", pid).execute()
                 stale_deleted += 1
             except Exception as e:
                 print(f"Error deleting stale product {pid}: {e}")
-
-        print(f"Deleted {stale_deleted} stale products")
+        
+        print(f"Deleted {stale_deleted} stale products ({len(missed_this_run)} products not seen, {len(to_delete)} confirmed stale)")
 
     top_merchants = sorted(merchant_counts.items(), key=lambda x: -x[1])[:20]
     print("\nTop 20 merchants by product count:")
