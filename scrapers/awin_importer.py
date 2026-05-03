@@ -195,7 +195,7 @@ def parse_price(value: str) -> float | None:
     cleaned = cleaned.replace(",", ".")
     try:
         num = float(cleaned)
-        if num > 0:
+        if num > 0 and num < 100000:
             return num
     except ValueError:
         pass
@@ -312,7 +312,8 @@ def map_row(row: dict) -> dict | None:
     if not aw_deep_link and not merchant_deep_link:
         return None
 
-    product_id = f"awin_{aw_product_id}"
+    merchant_id = row.get("merchant_id", "").strip()
+    product_id = f"awin_{merchant_id}_{aw_product_id}" if merchant_id else f"awin_{aw_product_id}"
 
     product_url = merchant_deep_link if merchant_deep_link else None
     if not product_url:
